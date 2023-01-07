@@ -22,7 +22,7 @@ Generated "iris.rs"
 
 You must pass in the path to a delimited file. By default, the name of this file becomes the name of the generated struct (albeit with some normalization) and the output source file. For example, "iris.csv" would generate an `Iris` struct contained in iris.rs. "shareholder_report.csv" will generate `ShareholderReport`. You can override this behavior using the `--typename name` argument to specify the struct name and `--output-file outfile` to specify the file to create. If the file already exists, it will _not_ be overwritten.
 
-Currently, a header row is required to identify column names. 
+The presence of a header row allows this tool to generate appropriate column names. If your data lack a header row, you may pass in the `--no-header` argument. This will count the number of columns in the first row of input and stub in column names in the format `column_{index}`. You may then rename these columns if you so choose from your IDE of choice.
 
 ## Schema detection
 
@@ -59,4 +59,3 @@ Because this binary is meant to be a Cargo custom command, it is called as `carg
 
 ## TODO
 * Try avoiding string allocations by using `Cow<'_, str>` if possible, storing the most recent `StringRecord` in the generated iterator.
-* Allow input to be generated with stubbed-in column names if the data lacks a header row.

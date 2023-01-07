@@ -94,7 +94,13 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
     writeln!(buf, "        P: AsRef<std::path::Path>,")?;
     writeln!(buf, "    {{")?;
     writeln!(buf, "        let reader = csv::ReaderBuilder::new()")?;
-    writeln!(buf, "            .has_headers(true)")?;
+
+    if args.no_header {
+        writeln!(buf, "            .has_headers(false)")?;
+    } else {
+        writeln!(buf, "            .has_headers(true)")?;
+    }
+
     if args.delimiter == '\t' {
         writeln!(buf, "            .delimiter(b'\\t')")?;
     } else {
@@ -376,14 +382,26 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
 
 fn check_file(args: &crate::Commands) -> Result<Vec<(String, ColumnType)>, TypeGenErrors> {
     let mut reader = csv::ReaderBuilder::new()
-        .has_headers(true)
+        .has_headers(!args.no_header)
         .from_path(&args.input_file)?;
 
-    let columns = reader
-        .headers()?
-        .iter()
-        .map(|s| s.replace(' ', "_"))
-        .collect::<Vec<_>>();
+    let columns = if args.no_header {
+        // We don't know what columns we have, so we'll read the first column:
+        let mut record = Default::default();
+        reader.read_record(&mut record)?;
+
+        // Reset the position of the internal buffer:
+        reader.seek(csv::Position::new())?;
+
+        // Create placeholder column names
+        (0..record.len()).map(|i| format!("column_{i}")).collect()
+    } else {
+        reader
+            .headers()?
+            .iter()
+            .map(|s| s.replace(' ', "_"))
+            .collect::<Vec<_>>()
+    };
 
     let mut intermediates = (0..columns.len())
         .map(|_| IntermediateColumnType::default())

@@ -60,6 +60,10 @@ pub struct Commands {
 
     #[arg(short, long, default_value = "false")]
     pub force: bool,
+
+    /// Indicates that no header exists on the input file
+    #[arg(long, default_value = "false")]
+    pub no_header: bool,
 }
 
 impl Commands {
