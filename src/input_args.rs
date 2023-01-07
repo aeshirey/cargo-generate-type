@@ -47,7 +47,7 @@ pub struct Commands {
     pub output_file: Option<PathBuf>,
 
     /// How many rows of input should be used to infer column types for the input file. Default is 100.
-    #[arg(short, long)]
+    #[arg(short, long, aliases=["rows"])]
     pub num_rows: Option<usize>,
 
     /// The column delimiter
@@ -57,19 +57,22 @@ pub struct Commands {
     /// How generated code should handle errors. Options are 'result', 'ignore', and 'panic'
     #[arg(short, long, aliases=["error"], default_value="result")]
     pub error_handling: ErrorHandling,
+
+    #[arg(short, long, default_value = "false")]
+    pub force: bool,
 }
 
 impl Commands {
     pub(crate) const DEFAULT_NUM_ROWS: usize = 100;
 
-    /// Determines the
+    /// Determines the name of the output source file to use
     pub(crate) fn get_output_filename(&self) -> PathBuf {
         if let Some(of) = &self.output_file {
             return of.to_owned();
         }
 
         match &self.typename {
-            Some(tn) => tn.replace(' ', " ").to_lowercase() + ".rs",
+            Some(tn) => tn.replace(' ', "_").to_lowercase() + ".rs",
             None => {
                 self.input_file
                     .file_stem()
@@ -101,7 +104,7 @@ impl Commands {
                     '_' | ' ' => cap = true,
                     c if cap => {
                         cap = false;
-                        c.to_uppercase().for_each(|ch| result.push(ch))
+                        c.to_uppercase().for_each(|ch| result.push(ch));
                     }
                     c => result.push(c),
                 }

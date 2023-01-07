@@ -64,17 +64,6 @@ impl ColumnType {
         }
     }
 
-    pub fn is_parseable(&self) -> bool {
-        !matches!(self, ColumnType::Unit | ColumnType::String(_))
-        /*
-        match self {
-            ColumnType::Unit => false,
-            ColumnType::String(_) => false,
-            _ => true,
-        }
-        */
-    }
-
     pub fn is_optional(&self) -> bool {
         match self {
             ColumnType::Unit => false,
@@ -112,7 +101,7 @@ impl Default for IntermediateColumnType {
 impl IntermediateColumnType {
     fn set_optional(self) -> Self {
         match self {
-            IntermediateColumnType::Unknown(_) => IntermediateColumnType::Bool(true),
+            IntermediateColumnType::Unknown(_) => IntermediateColumnType::Unknown(true),
             IntermediateColumnType::Bool(_) => IntermediateColumnType::Bool(true),
             IntermediateColumnType::Integer(min, max, _) => {
                 IntermediateColumnType::Integer(min, max, true)

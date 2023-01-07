@@ -1,7 +1,7 @@
 use crate::{
     column::{ColumnType, IntermediateColumnType},
     err::TypeGenErrors,
-    input_args::{ErrorHandling, Commands},
+    input_args::{Commands, ErrorHandling},
 };
 use std::{
     fs::File,
@@ -66,7 +66,9 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
         writeln!(buf, "    }}")?;
         writeln!(buf, "}}")?;
     }
+    writeln!(buf)?;
 
+    writeln!(buf, "#[derive(Clone, Debug)]")?;
     writeln!(buf, "pub struct {typename} {{")?;
     for (name, coltype) in columns.iter() {
         // TODO: For String types, we might be able to use Cow<'_, str>, referencing the StringRecord value
@@ -78,14 +80,9 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
 
     writeln!(buf, "impl {typename} {{")?;
     writeln!(buf, "    pub const COLUMNS: [&str; {}] = [", columns.len())?;
-    for (i, (name, _)) in columns.iter().enumerate() {
-        if i == 0 {
-            write!(buf, "        \"{name}\"")?;
-        } else {
-            write!(buf, ",\n        \"{name}\"")?;
-        }
+    for (name, _) in columns.iter() {
+        writeln!(buf, "        \"{name}\",")?;
     }
-    writeln!(buf)?;
     writeln!(buf, "    ];")?;
     writeln!(buf)?;
 
@@ -106,7 +103,8 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
     writeln!(buf, "            .from_path(filename)?;")?;
     writeln!(buf)?;
     writeln!(buf, "        let records = reader.into_records();")?;
-    writeln!(buf, "        Ok({typename}Iterator {{ records }})")?;
+    writeln!(buf, "        let row = csv::StringRecord::default();")?;
+    writeln!(buf, "        Ok({typename}Iterator {{ records, row }})")?;
     writeln!(buf, "    }}")?;
     writeln!(buf, "}}")?;
     writeln!(buf)?;
@@ -116,6 +114,7 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
         buf,
         "    records: csv::StringRecordsIntoIter<std::fs::File>,"
     )?;
+    writeln!(buf, "    row: csv::StringRecord,")?;
     writeln!(buf, "}}")?;
     writeln!(buf)?;
 
@@ -138,28 +137,24 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
                 "        // Because we're ignoring errors, loop until a row is valid"
             )?;
             writeln!(buf, "        loop {{")?;
-            writeln!(buf, "            let row = match self.records.next()? {{")?;
+            writeln!(buf, "            self.row = match self.records.next()? {{")?;
             writeln!(buf, "                Ok(r) => r,")?;
             writeln!(buf, "                Err(_) => continue,")?;
             writeln!(buf, "            }};")?;
             "            " // IgnoreRow indents more than other error handling
         }
         ErrorHandling::Result => {
-            writeln!(buf, "        let row = match self.records.next()? {{")?;
+            writeln!(buf, "        self.row = match self.records.next()? {{")?;
             writeln!(buf, "            Ok(r) => r,")?;
             writeln!(buf, "            Err(e) => return Some(Err(e.into())),")?;
             writeln!(buf, "        }};")?;
             "        "
         }
         ErrorHandling::Panic => {
-            writeln!(buf, "        let row = match self.records.next()? {{")?;
+            writeln!(buf, "        self.row = match self.records.next()? {{")?;
             writeln!(buf, "            Ok(r) => r,")?;
-            writeln!(
-                buf,
-                "            Err(_) => panic!(\"Failed to get row after line {{}}\"),"
-            )?;
+            writeln!(buf, "            Err(_) => panic!(\"Failed to get row\"),")?;
             writeln!(buf, "        }};")?;
-            //writeln!(buf, "        let row = self.records.next()?.unwrap();")?;
             "        "
         }
     };
@@ -167,7 +162,10 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
 
     match args.error_handling {
         ErrorHandling::Result | ErrorHandling::Panic => {
-            writeln!(buf, "{indent}let linenum = row.position().unwrap().line();")?;
+            writeln!(
+                buf,
+                "{indent}let linenum = self.row.position().unwrap().line();"
+            )?;
             writeln!(buf)?;
         }
         ErrorHandling::IgnoreRow => {}
@@ -175,15 +173,15 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
 
     // Extract each column
     for (i, (name, coltype)) in columns.iter().enumerate() {
-        let parseable = coltype.is_parseable();
         let optional = coltype.is_optional();
 
         if coltype == &ColumnType::Unit {
-            writeln!(buf, "let {name} = ();")?;
+            writeln!(buf, "{indent}let {name} = ();")?;
+            writeln!(buf)?;
             continue;
         }
 
-        writeln!(buf, "{indent}let {name} = match row.get({i}) {{")?;
+        writeln!(buf, "{indent}let {name} = match self.row.get({i}) {{")?;
         match args.error_handling {
             ErrorHandling::IgnoreRow => {
                 writeln!(buf, "{indent}    None => continue,")?;
@@ -193,25 +191,41 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
                         buf,
                         "{indent}    Some(\"\") => None, // empty optional fields become None"
                     )?;
+                    write!(buf, "{indent}    Some(val) => Some(")?;
+                } else {
+                    write!(buf, "{indent}    Some(val) => ")?;
                 }
 
-                let val = if parseable {
-                    let mut s = "match val.parse() {\n".to_string();
-                    s.push_str(&format!("{indent}        Ok(v) => v,\n"));
-                    s.push_str(&format!(
-                        "{indent}        Err(_) => continue, // invalid value - skip this row\n"
-                    ));
-                    s.push_str(&format!("{indent}    }}"));
-                    s
-                } else {
-                    // if it's not parseable, it's a string
-                    "val.to_owned()".to_owned()
+                match coltype {
+                    ColumnType::String(_) => writeln!(buf, "val.to_owned()")?,
+                    ColumnType::Bool(_) => {
+                        // Bools will do case-insensitive comparisons for 'true'/'false'
+                        writeln!(buf, "if val.eq_ignore_ascii_case(\"true\") {{")?;
+                        writeln!(buf, "{indent}        true\n")?;
+                        writeln!(
+                            buf,
+                            "{indent}    }} else if val.eq_ignore_ascii_case(\"false\") {{\n"
+                        )?;
+                        writeln!(buf, "{indent}        false\n")?;
+                        writeln!(buf, "{indent}    }} else {{\n")?;
+                        writeln!(buf, "{indent}        continue\n")?;
+                        write!(buf, "{indent}    }}")?;
+                    }
+                    _ => {
+                        writeln!(buf, "match val.parse() {{")?;
+                        writeln!(buf, "{indent}        Ok(v) => v,")?;
+                        writeln!(
+                            buf,
+                            "{indent}        Err(_) => continue, // invalid value - skip this row"
+                        )?;
+                        write!(buf, "{indent}    }}")?;
+                    }
                 };
 
                 if optional {
-                    writeln!(buf, "{indent}    Some(val) => Some({val}),")?;
+                    writeln!(buf, "),")?;
                 } else {
-                    writeln!(buf, "{indent}    Some(val) => {val},")?;
+                    writeln!(buf, ",")?;
                 }
             }
             ErrorHandling::Result => {
@@ -225,25 +239,41 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
                         buf,
                         "{indent}    Some(\"\") => None, // empty optional fields become None"
                     )?;
+                    write!(buf, "{indent}    Some(val) => Some(")?;
+                } else {
+                    write!(buf, "{indent}    Some(val) => ")?;
                 }
 
-                let val = if parseable {
-                    let mut s = "match val.parse() {\n".to_string();
-                    s.push_str(&format!("{indent}        Ok(v) => v,\n"));
-                    s.push_str(&format!(
-                        "{indent}        Err(_) => return Some(Err((linenum, \"{name}\", val).into())),\n"
-                    ));
-                    s.push_str(&format!("{indent}    }}"));
-                    s
-                } else {
-                    // if it's not parseable, it's a string
-                    "val.to_owned()".to_owned()
+                match coltype {
+                    ColumnType::String(_) => write!(buf, "val.to_owned()")?,
+                    ColumnType::Bool(_) => {
+                        // Bools will do case-insensitive comparisons for 'true'/'false'
+                        writeln!(buf, "if val.eq_ignore_ascii_case(\"true\") {{")?;
+                        writeln!(buf, "{indent}        true")?;
+                        writeln!(
+                            buf,
+                            "{indent}    }} else if val.eq_ignore_ascii_case(\"false\") {{"
+                        )?;
+                        writeln!(buf, "{indent}        false")?;
+                        writeln!(buf, "{indent}    }} else {{")?;
+                        writeln!(
+                            buf,
+                            "{indent}        return Some(Err((linenum, \"{name}\", val).into()));"
+                        )?;
+                        write!(buf, "{indent}    }}")?
+                    }
+                    _ => {
+                        writeln!(buf, "match val.parse() {{")?;
+                        writeln!(buf, "{indent}        Ok(v) => v,\n")?;
+                        writeln!(buf, "{indent}        Err(_) => return Some(Err((linenum, \"{name}\", val).into())),")?;
+                        write!(buf, "{indent}    }}")?
+                    }
                 };
 
                 if optional {
-                    writeln!(buf, "{indent}    Some(val) => Some({val}),")?;
+                    writeln!(buf, "),")?;
                 } else {
-                    writeln!(buf, "{indent}    Some(val) => {val},")?;
+                    writeln!(buf, ",")?;
                 }
             }
             ErrorHandling::Panic => {
@@ -252,26 +282,37 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
 
                 if optional {
                     writeln!(buf, "{indent}    Some(\"\") => None,")?;
+                    write!(buf, "{indent}    Some(val) => Some(")?;
+                } else {
+                    write!(buf, "{indent}    Some(val) => ")?;
                 }
 
-                let val = if parseable {
-                    //"match val.parse().unwrap()"
-                    let mut s = "match val.parse() {\n".to_string();
-                    s.push_str(&format!("{indent}        Ok(v) => v,\n"));
-                    s.push_str(&format!(
-                        "{indent}        Err(_) => panic!(\"Failed to parse {name}='{{val}}' at line={{linenum}} column={i}\"),\n"
-                    ));
-                    s.push_str(&format!("{indent}    }}"));
-                    s
-                } else {
-                    // if it's not parseable, it's a string
-                    "val.to_owned()".to_owned()
-                };
+                match coltype {
+                    ColumnType::String(_) => write!(buf, "val.to_owned()")?,
+                    ColumnType::Bool(_) => {
+                        writeln!(buf, "if val.eq_ignore_ascii_case(\"true\") {{")?;
+                        writeln!(buf, "{indent}        true")?;
+                        writeln!(
+                            buf,
+                            "{indent}    }} else if val.eq_ignore_ascii_case(\"false\") {{"
+                        )?;
+                        writeln!(buf, "{indent}        false")?;
+                        writeln!(buf, "{indent}    }} else {{")?;
+                        writeln!(buf, "{indent}        panic!(\"Failed to parse {name}='{{val}}' at line={{linenum}} column={i}\")")?;
+                        write!(buf, "{indent}    }}")?
+                    }
+                    _ => {
+                        writeln!(buf, "match val.parse() {{")?;
+                        writeln!(buf, "{indent}        Ok(v) => v,")?;
+                        writeln!(buf, "{indent}        Err(_) => panic!(\"Failed to parse {name}='{{val}}' at line={{linenum}} column={i}\"),")?;
+                        write!(buf, "{indent}    }}")?;
+                    }
+                }
 
                 if optional {
-                    writeln!(buf, "{indent}    Some(val) => Some({val}),")?;
+                    writeln!(buf, "),")?;
                 } else {
-                    writeln!(buf, "{indent}    Some(val) => {val},")?;
+                    writeln!(buf, ",")?;
                 }
             }
         }
@@ -299,6 +340,34 @@ pub fn generate(args: &crate::Commands, buf: &mut BufWriter<File>) -> Result<(),
         ErrorHandling::Panic => writeln!(buf, "{indent}Some(res)")?,
     }
 
+    writeln!(buf, "    }}")?;
+    writeln!(buf, "}}")?;
+    writeln!(buf)?;
+
+    writeln!(buf, "fn main() {{")?;
+    match args.error_handling {
+        ErrorHandling::Result => {
+            // for the result type, our sample will flatten Result<T,E> out to T
+            writeln!(
+                buf,
+                "    for row in {typename}::load_csv({:?})",
+                args.input_file
+            )?;
+            writeln!(buf, "        .expect(\"Couldn't load file\")")?;
+            writeln!(buf, "        .flatten()")?;
+            writeln!(buf, "    {{")?;
+        }
+        _ => {
+            // other kinds will always get T
+            writeln!(
+                buf,
+                "    for row in {typename}::load_csv({:?})",
+                args.input_file
+            )?;
+            writeln!(buf, "        .expect(\"Couldn't load file\") {{")?;
+        }
+    }
+    writeln!(buf, "        println!(\"Got row: {{row:?}}\");")?;
     writeln!(buf, "    }}")?;
     writeln!(buf, "}}")?;
 
@@ -329,6 +398,7 @@ fn check_file(args: &crate::Commands) -> Result<Vec<(String, ColumnType)>, TypeG
     for row in reader.into_records().flatten().take(num_rows) {
         for index in 0..columns.len() {
             let input_value = &row[index];
+
             intermediates[index].agg(input_value);
         }
     }
