@@ -40,17 +40,20 @@ where
 
 #[derive(Clone, Debug)]
 pub struct Iris {
-    pub sepal_length_in_cm: (),
-    pub sepal_width_in_cm: (),
-    pub petal_length_in_cm: (),
-    pub petal_width_in_cm: (),
-    pub class: (),
-    pub unit: (),
+    pub sepal_length_in_cm: f64,
+    pub sepal_width_in_cm: f64,
+    pub petal_length_in_cm: f64,
+    pub petal_width_in_cm: f64,
+    pub class: String,
 }
 
 impl Iris {
-    pub const COLUMNS: [&str; 6] = [
-        "sepal_length_in_cm",        "sepal_width_in_cm",        "petal_length_in_cm",        "petal_width_in_cm",        "class",        "unit",
+    pub const COLUMNS: [&str; 5] = [
+        "sepal_length_in_cm",
+        "sepal_width_in_cm",
+        "petal_length_in_cm",
+        "petal_width_in_cm",
+        "class",
     ];
 
     pub fn load_csv<P>(filename: P) -> Result<IrisIterator, csv::Error>
@@ -84,19 +87,53 @@ impl Iterator for IrisIterator {
 
         let linenum = self.row.position().unwrap().line();
 
-let sepal_length_in_cm = ();
-let sepal_width_in_cm = ();
-let petal_length_in_cm = ();
-let petal_width_in_cm = ();
-let class = ();
-let unit = ();
+        let sepal_length_in_cm = match self.row.get(0) {
+            None => return Some(Err((linenum, "sepal_length_in_cm").into())),
+            Some(val) => match val.parse() {
+                Ok(v) => v,
+
+                Err(_) => return Some(Err((linenum, "sepal_length_in_cm", val).into())),
+            },
+        };
+
+        let sepal_width_in_cm = match self.row.get(1) {
+            None => return Some(Err((linenum, "sepal_width_in_cm").into())),
+            Some(val) => match val.parse() {
+                Ok(v) => v,
+
+                Err(_) => return Some(Err((linenum, "sepal_width_in_cm", val).into())),
+            },
+        };
+
+        let petal_length_in_cm = match self.row.get(2) {
+            None => return Some(Err((linenum, "petal_length_in_cm").into())),
+            Some(val) => match val.parse() {
+                Ok(v) => v,
+
+                Err(_) => return Some(Err((linenum, "petal_length_in_cm", val).into())),
+            },
+        };
+
+        let petal_width_in_cm = match self.row.get(3) {
+            None => return Some(Err((linenum, "petal_width_in_cm").into())),
+            Some(val) => match val.parse() {
+                Ok(v) => v,
+
+                Err(_) => return Some(Err((linenum, "petal_width_in_cm", val).into())),
+            },
+        };
+
+        let class = match self.row.get(4) {
+            None => return Some(Err((linenum, "class").into())),
+            Some(val) => val.to_owned(),
+        };
+
         let res = Iris {
             sepal_length_in_cm,
             sepal_width_in_cm,
             petal_length_in_cm,
             petal_width_in_cm,
             class,
-            unit,
         };
 
         Some(Ok(res))
