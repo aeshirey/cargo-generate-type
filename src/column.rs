@@ -1,19 +1,6 @@
 use std::{fmt::Display, str::FromStr};
 
-/*
-use askama::Template;
-use crate::input_args::ErrorHandling;
-
-#[derive(Template)]
-#[template(path = "generated_type.rs", escape = "none")]
-pub struct CsvTemplate {
-    delimiter: &'static str,
-    columns: Vec<(usize, String, ColumnType)>,
-    error_handling: ErrorHandling,
-}
-*/
-
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum ColumnType {
     Unit,
     Bool(bool),
@@ -172,7 +159,7 @@ impl IntermediateColumnType {
         }
     }
 
-    pub(crate) fn finalize(self) -> ColumnType {
+    pub(crate) fn finish(self) -> ColumnType {
         match self {
             IntermediateColumnType::Unknown(_) => ColumnType::Unit,
             IntermediateColumnType::Bool(b) => ColumnType::Bool(b),

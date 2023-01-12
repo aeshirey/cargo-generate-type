@@ -1,0 +1,16 @@
+This represents [Fisher's Iris data set](https://en.wikipedia.org/wiki/Iris_flower_data_set)
+
+[sepal length in cm]
+The length of the flower's sepal, in centimeters.
+
+[sepal width in cm]
+The width of the flower's sepal, in centimeters.
+
+[petal length in cm]
+The length of the flower's petal, in centimeters.
+
+[petal width in cm]
+The width of the flower's petal, in centimeters.
+
+[class]
+The species of flower, one of: Iris-setosa, Iris-virginica, Iris-versicolor.

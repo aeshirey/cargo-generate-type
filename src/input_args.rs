@@ -76,15 +76,16 @@ impl Commands {
         }
 
         match &self.typename {
-            Some(tn) => tn.replace(' ', "_").to_lowercase() + ".rs",
+            Some(tn) => crate::util::header_to_identifier(tn).to_lowercase() + ".rs",
             None => {
-                self.input_file
-                    .file_stem()
-                    .expect("File stem")
-                    .to_str()
-                    .expect("File stem from OsStr")
-                    .replace(' ', "_")
-                    .to_lowercase()
+                crate::util::header_to_identifier(
+                    self.input_file
+                        .file_stem()
+                        .expect("File stem")
+                        .to_str()
+                        .expect("File stem from OsStr"),
+                )
+                .to_lowercase()
                     + ".rs"
             }
         }

@@ -5,6 +5,7 @@ mod column;
 mod err;
 mod generate_csv;
 mod input_args;
+mod util;
 
 fn main() -> Result<(), err::TypeGenErrors> {
     let args = Commands::parse();
@@ -20,7 +21,10 @@ fn main() -> Result<(), err::TypeGenErrors> {
     let out_file = std::fs::File::create(&out_filename)?;
     let mut buf = std::io::BufWriter::new(out_file);
 
-    generate_csv::generate(&args, &mut buf)?;
+    generate_csv::CsvFileInfo::new(args)
+        .analyze_input()?
+        .load_data_def()
+        .generate(&mut buf)?;
 
     println!("Generated {out_filename:?}");
 

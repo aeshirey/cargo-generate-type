@@ -39,21 +39,36 @@ where
 }
 
 #[derive(Clone, Debug)]
+/// This represents [Fisher's Iris data set](https://en.wikipedia.org/wiki/Iris_flower_data_set)
 pub struct Iris {
+    /// The length of the flower's sepal, in centimeters.
     pub sepal_length_in_cm: f64,
+    /// The width of the flower's sepal, in centimeters.
     pub sepal_width_in_cm: f64,
+    /// The length of the flower's petal, in centimeters.
     pub petal_length_in_cm: f64,
+    /// The width of the flower's petal, in centimeters.
     pub petal_width_in_cm: f64,
+    /// The species of flower, one of: Iris-setosa, Iris-virginica, Iris-versicolor.
     pub class: String,
 }
 
 impl Iris {
-    pub const COLUMNS: [&str; 5] = [
+    pub const COLUMN_NAMES: [&str; 5] = [
         "sepal_length_in_cm",
         "sepal_width_in_cm",
         "petal_length_in_cm",
         "petal_width_in_cm",
         "class",
+    ];
+
+    /// A string representation of the Rust type associated with each type.
+    pub const COLUMN_TYPES: [&str; 5] = [
+        "f64", // sepal_length_in_cm
+        "f64", // sepal_width_in_cm
+        "f64", // petal_length_in_cm
+        "f64", // petal_width_in_cm
+        "String", // class
     ];
 
     pub fn load_csv<P>(filename: P) -> Result<IrisIterator, csv::Error>
