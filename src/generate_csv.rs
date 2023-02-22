@@ -41,6 +41,7 @@ impl CsvFileInfo {
         //Result<Vec<(String, ColumnType)>, TypeGenErrors> {
         let mut reader = csv::ReaderBuilder::new()
             .has_headers(!self.args.no_header)
+            .delimiter(self.args.delimiter as u8)
             .flexible(true)
             .from_path(&self.args.input_file)?;
 
