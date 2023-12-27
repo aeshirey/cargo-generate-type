@@ -67,6 +67,15 @@ Generated code can handle unexpected input in three different ways, specified wi
 2. `--error panic` will panic for any row with invalid input.
 3. `--error result` will return a `Result<T, E>` for every row with `T` being the type representing your data and `E` covering underlying [`csv` errors](https://docs.rs/csv/latest/csv/struct.Error.html) as well as unexpected input types. This is the default behavior if unspecified.
 
+## String Handling
+By default, text columns will be processed as owned `String`s. For large inputs or for columns that have low cardinality, the memory allocation that is incurred may be excessive. Version 0.1.3 provides for the `--strings` argument with possible values `owned` (default), `static`, and `enum`.
+
+With `--strings static`, the set of distinct strings seen are profiled, and generated code will give you a `&'static str` instead of `String`, thereby reducing memory allocations (and permitting the generated struct to `#[derive(Copy)]`).
+
+The same thing is done with `--strings enum`, except an auxiliary enum is defined with `impl std::str::FromStr` to parse the input text as that enum. This enum and thus the type's struct are also `Copy`.
+
+There is also a `--max-strings n` argument (where _n_ defaults to 20); if more than _n_ distinct values are seen, code generation fails so as to avoid excessive code for high cardinality data.
+
 ## Note on use
 
 Because this binary is meant to be a Cargo custom command, it is called as `cargo generate-type`. Note that this is the `cargo` program with the `generate-type` subcommand. Cargo passes this subcommand as an argument to the binary, which it ignores. Because this argument is expected, if you try running `cargo-generate-type` itself, you must pass a dummy argument to it:
@@ -75,6 +84,3 @@ Because this binary is meant to be a Cargo custom command, it is called as `carg
 ./cargo-generate-type generate-type shareholder_report.csv --error result
 #                     ^^^^^^^^^^^^^ or any bogus argument is fine
 ```
-
-## TODO
-* Try avoiding string allocations by using `Cow<'_, str>` if possible, storing the most recent `StringRecord` in the generated iterator.
