@@ -1,6 +1,8 @@
 use clap::Parser;
 use std::{path::PathBuf, str::FromStr};
 
+use crate::util;
+
 /// Specifies how errors are handled with input data, either from the underlying `csv` parser or
 /// due to unexpected (ie, unparseable) input values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +30,28 @@ impl FromStr for ErrorHandling {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StringHandling {
+    Owned,
+    Static,
+    Enum(u8),
+}
+
+impl FromStr for StringHandling {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let eh = match &s.to_lowercase()[..] {
+            "owned" => Self::Owned,
+            "static" => Self::Static,
+            "enum" => Self::Enum(10),
+            _ => Err(format!("Unknown strings handler: {s}"))?,
+        };
+
+        Ok(eh)
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Parser)]
 #[command(author, version, bin_name("cargo-generate-type"), about)]
@@ -46,8 +70,8 @@ pub struct Commands {
     #[arg(short, long)]
     pub output_file: Option<PathBuf>,
 
-    /// How many rows of input should be used to infer column types for the input file. Default is 100.
-    #[arg(short, long, aliases=["rows"])]
+    /// How many rows of input should be used to infer column types for the input file.
+    #[arg(short, long, aliases=["rows"], default_value="1000")]
     pub num_rows: Option<usize>,
 
     /// The column delimiter
@@ -58,12 +82,21 @@ pub struct Commands {
     #[arg(short, long, aliases=["error"], default_value="result")]
     pub error_handling: ErrorHandling,
 
+    /// Permits the output file to be overwritten if it exists.
     #[arg(short, long, default_value = "false")]
     pub force: bool,
 
     /// Indicates that no header exists on the input file
     #[arg(long, default_value = "false")]
     pub no_header: bool,
+
+    /// How strings will be stored. Options are 'owned', 'static', and 'enum'.
+    #[arg(short, long, aliases=["strings"], default_value="owned")]
+    pub string_handling: StringHandling,
+
+    /// How many individual values are recognized for 'static' or 'enum' string_handling; other values are handled as errors.
+    #[arg(short, long, default_value = "20")]
+    pub max_strings: Option<usize>,
 }
 
 impl Commands {
@@ -76,9 +109,9 @@ impl Commands {
         }
 
         match &self.typename {
-            Some(tn) => crate::util::header_to_identifier(tn).to_lowercase() + ".rs",
+            Some(tn) => util::header_to_identifier(tn).to_lowercase() + ".rs",
             None => {
-                crate::util::header_to_identifier(
+                util::header_to_identifier(
                     self.input_file
                         .file_stem()
                         .expect("File stem")
@@ -101,21 +134,24 @@ impl Commands {
             let filename = self.input_file.file_stem().expect("File stem");
             let filename = filename.to_str().expect("File stem from OsStr");
 
-            let mut result = String::new();
-            let mut cap = true;
+            util::str_to_camel_case_identifier(filename)
+            /*
+                       let mut result = String::new();
+                       let mut cap = true;
 
-            for c in filename.chars() {
-                match c {
-                    '_' | ' ' => cap = true,
-                    c if cap => {
-                        cap = false;
-                        c.to_uppercase().for_each(|ch| result.push(ch));
-                    }
-                    c => result.push(c),
-                }
-            }
+                       for c in filename.chars() {
+                           match c {
+                               '_' | ' ' => cap = true,
+                               c if cap => {
+                                   cap = false;
+                                   c.to_uppercase().for_each(|ch| result.push(ch));
+                               }
+                               c => result.push(c),
+                           }
+                       }
 
-            result
+                       result
+            */
         }
     }
 }

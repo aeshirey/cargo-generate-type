@@ -1,9 +1,12 @@
 use crate::{
     column::{ColumnType, IntermediateColumnType},
     err::TypeGenErrors,
-    input_args::{Commands, ErrorHandling},
+    input_args::{Commands, ErrorHandling, StringHandling},
+    util,
 };
 use std::{
+    borrow::Cow,
+    collections::HashSet,
     fs::File,
     io::{BufWriter, Write},
 };
@@ -13,6 +16,8 @@ struct CsvColumnInfo {
     column_docs: Vec<String>,
     name: String,
     r#type: ColumnType,
+    seen_values: HashSet<String>,
+    error_handling: ErrorHandling,
 }
 
 #[derive(Debug)]
@@ -73,19 +78,64 @@ impl CsvFileInfo {
             None => Commands::DEFAULT_NUM_ROWS,
         };
 
-        for row in reader.into_records().flatten().take(num_rows) {
+        let start_position = reader.position().clone();
+
+        for (linenum, row) in reader.records().flatten().take(num_rows).enumerate() {
+            if row.len() != columns.len() {
+                return Err(TypeGenErrors::Other(
+                    format!(
+                        "Expected {} columns but found {} on line {linenum}",
+                        columns.len(),
+                        row.len()
+                    )
+                    .into(),
+                ));
+            }
+
             for index in 0..columns.len() {
+                //println!("{} @ {index}", &row[index]);
                 intermediates[index].agg(&row[index]);
+            }
+        }
+
+        reader.seek(start_position).unwrap();
+
+        // If we're not going to yield owned strings, we will need to collect the set of known values
+        let mut seen_values = (0..columns.len())
+            .map(|_| std::collections::HashSet::new())
+            .collect::<Vec<_>>();
+
+        if self.args.string_handling != StringHandling::Owned {
+            for row in reader.records().flatten().take(num_rows) {
+                for index in 0..columns.len() {
+                    // Only need to do anything if this is a string column
+                    if matches!(intermediates[index], IntermediateColumnType::String(_)) {
+                        seen_values[index].insert(row[index].to_string());
+
+                        // Now that we've inserted a value, check if we exceed a (possibly) specified cardinality limit
+                        if let Some(max_strings) = self.args.max_strings {
+                            if seen_values[index].len() > max_strings {
+                                return Err(TypeGenErrors::Other(
+                                    format!("Too many unique strings in column {}", columns[index])
+                                        .into(),
+                                ));
+                            }
+                        }
+                    }
+                }
             }
         }
 
         self.columns = columns
             .into_iter()
             .zip(intermediates)
-            .map(|(name, coltype)| CsvColumnInfo {
+            .zip(seen_values)
+            .map(|((name, coltype), seen_values)| CsvColumnInfo {
                 name,
                 r#type: coltype.finish(),
                 column_docs: Vec::new(),
+                seen_values,
+                error_handling: self.args.error_handling,
             })
             .collect();
 
@@ -166,10 +216,25 @@ impl CsvFileInfo {
         }
         writeln!(buf)?;
 
-        writeln!(buf, "#[derive(Clone, Debug)]")?;
+        if matches!(self.args.string_handling, StringHandling::Enum(_)) {
+            for col in &self.columns {
+                if matches!(col.r#type, ColumnType::String(_)) {
+                    col.write_enum(buf)?;
+                }
+            }
+        }
+
+        // If string handling is 'static' or 'enum, we can derive 'Copy' on the type
+        match self.args.string_handling {
+            StringHandling::Static => writeln!(buf, "#[derive(Copy, Clone, Debug)]")?,
+            StringHandling::Enum(_) => writeln!(buf, "#[derive(Copy, Clone, Debug)]")?,
+            StringHandling::Owned => writeln!(buf, "#[derive(Clone, Debug)]")?,
+        }
+
         for doc in &self.struct_docs {
             writeln!(buf, "/// {doc}")?;
         }
+
         writeln!(buf, "pub struct {typename} {{")?;
         for col in &self.columns {
             // TODO: For String types, we might be able to use Cow<'_, str>, referencing the StringRecord value
@@ -177,37 +242,39 @@ impl CsvFileInfo {
             for doc in &col.column_docs {
                 writeln!(buf, "    /// {doc}")?;
             }
-            writeln!(buf, "    pub {}: {},", col.name, col.r#type)?;
+            writeln!(
+                buf,
+                "    pub {}: {},",
+                util::str_to_snake_case_identifier(&col.name),
+                col.as_str(self.args.string_handling)
+            )?;
         }
         writeln!(buf, "}}")?;
         writeln!(buf)?;
 
         writeln!(buf, "impl {typename} {{")?;
-        writeln!(
-            buf,
-            "    pub const COLUMN_NAMES: [&str; {}] = [",
-            self.columns.len()
-        )?;
-        for col in &self.columns {
-            writeln!(buf, "        \"{}\",", col.name)?;
-        }
-        writeln!(buf, "    ];")?;
-        writeln!(buf)?;
 
-        writeln!(
-            buf,
-            "    /// A string representation of the Rust type associated with each type."
-        )?;
-        writeln!(
-            buf,
-            "    pub const COLUMN_TYPES: [&str; {}] = [",
-            self.columns.len()
-        )?;
-        for col in &self.columns {
-            writeln!(buf, "        \"{}\", // {}", col.r#type, col.name)?;
+        {
+            writeln!(
+                buf,
+                "    /// The `(name, type)` associated with each column."
+            )?;
+            writeln!(
+                buf,
+                "    pub const COLUMNS: [(&str, &str); {}] = [",
+                self.columns.len()
+            )?;
+            for col in &self.columns {
+                writeln!(
+                    buf,
+                    "        (\"{}\", \"{}\"),",
+                    col.name,
+                    col.as_str(self.args.string_handling),
+                )?;
+            }
+            writeln!(buf, "    ];")?;
+            writeln!(buf)?;
         }
-        writeln!(buf, "    ];")?;
-        writeln!(buf)?;
 
         writeln!(
             buf,
@@ -306,6 +373,8 @@ impl CsvFileInfo {
                 column_docs: _,
                 name,
                 r#type,
+                seen_values,
+                error_handling,
             } = col;
 
             let optional = r#type.is_optional();
@@ -316,139 +385,94 @@ impl CsvFileInfo {
                 continue;
             }
 
-            writeln!(buf, "{indent}let {name} = match self.row.get({i}) {{")?;
-            match self.args.error_handling {
-                ErrorHandling::IgnoreRow => {
-                    writeln!(buf, "{indent}    None => continue,")?;
+            let snake_name = util::str_to_snake_case_identifier(name);
+            writeln!(buf, "{indent}let {snake_name} = match self.row.get({i}) {{")?;
+            write!(buf, "{indent}    None => ")?;
 
-                    if optional {
-                        writeln!(
-                            buf,
-                            "{indent}    Some(\"\") => None, // empty optional fields become None"
-                        )?;
-                        write!(buf, "{indent}    Some(val) => Some(")?;
-                    } else {
-                        write!(buf, "{indent}    Some(val) => ")?;
+            // Can't get a value from the CSV reader
+            {
+                match self.args.error_handling {
+                    ErrorHandling::IgnoreRow => {
+                        writeln!(buf, "continue,")?;
                     }
-
-                    match r#type {
-                        ColumnType::String(_) => writeln!(buf, "val.to_owned()")?,
-                        ColumnType::Bool(_) => {
-                            // Bools will do case-insensitive comparisons for 'true'/'false'
-                            writeln!(buf, "if val.eq_ignore_ascii_case(\"true\") {{")?;
-                            writeln!(buf, "{indent}        true\n")?;
-                            writeln!(
-                                buf,
-                                "{indent}    }} else if val.eq_ignore_ascii_case(\"false\") {{\n"
-                            )?;
-                            writeln!(buf, "{indent}        false\n")?;
-                            writeln!(buf, "{indent}    }} else {{\n")?;
-                            writeln!(buf, "{indent}        continue\n")?;
-                            write!(buf, "{indent}    }}")?;
-                        }
-                        _ => {
-                            writeln!(buf, "match val.parse() {{")?;
-                            writeln!(buf, "{indent}        Ok(v) => v,")?;
-                            writeln!(
-                            buf,
-                            "{indent}        Err(_) => continue, // invalid value - skip this row"
-                        )?;
-                            write!(buf, "{indent}    }}")?;
-                        }
-                    };
-
-                    if optional {
-                        writeln!(buf, "),")?;
-                    } else {
-                        writeln!(buf, ",")?;
+                    ErrorHandling::Result => {
+                        writeln!(buf, "return Some(Err((linenum, \"{name}\").into())),")?;
+                    }
+                    ErrorHandling::Panic => {
+                        writeln!(buf, "panic!(\"Failed to get '{snake_name}' at line={{linenum}} column={i}\"),")?;
                     }
                 }
-                ErrorHandling::Result => {
-                    writeln!(
+            }
+
+            // Handle the Some start for all non-strings
+            //if !matches!(r#type, ColumnType::String(_)) {
+            if optional {
+                writeln!(buf, "{indent}    Some(\"\") => None,")?;
+                //} else if matches!(r#type, ColumnType::Unit) {
+                //    writeln!(buf, "{indent}    Some(\"\") => (),")?;
+            }
+            //}
+
+            let error_string = match error_handling {
+                ErrorHandling::IgnoreRow => "continue".to_string(),
+                ErrorHandling::Result => format!("return Some(Err((linenum, \"{snake_name}\", val).into()))"),
+                ErrorHandling::Panic =>  format!("panic!(\"Unexpected '{snake_name}' value '{{val}}' at line={{linenum}} column={i}\")"),
+            };
+
+            match r#type {
+                ColumnType::String(_) => match self.args.string_handling {
+                    StringHandling::Owned => {
+                        write!(buf, "{indent}    Some(val) => val.to_owned()")?
+                    }
+                    StringHandling::Static => {
+                        //writeln!(buf, "Some(val) => match val {{")?;
+                        for seen in seen_values {
+                            writeln!(buf, "{indent}    Some(\"{seen}\") => \"{seen}\",")?;
+                        }
+                        writeln!(buf, "{indent}    Some(val) => {error_string},")?;
+                        //writeln!(buf, "{indent}    }}")?;
+                    }
+                    StringHandling::Enum(_) => {
+                        writeln!(buf, "{indent}    Some(val) => match val.parse() {{")?;
+                        writeln!(buf, "{indent}        Ok(v) => v,")?;
+                        writeln!(buf, "{indent}        Err(_) => {error_string},")?;
+                        writeln!(buf, "{indent}    }}")?;
+                    }
+                },
+                ColumnType::Bool(_) => {
+                    // Bools will do case-insensitive comparisons for 'true'/'false'
+                    write!(
                         buf,
-                        "{indent}    None => return Some(Err((linenum, \"{name}\").into())),"
+                        "{indent}    Some(val) if val.eq_ignore_ascii_case(\"true\") => "
                     )?;
 
                     if optional {
-                        writeln!(
-                            buf,
-                            "{indent}    Some(\"\") => None, // empty optional fields become None"
-                        )?;
-                        write!(buf, "{indent}    Some(val) => Some(")?;
+                        writeln!(buf, "Some(true),")?;
                     } else {
-                        write!(buf, "{indent}    Some(val) => ")?;
+                        writeln!(buf, "true,")?;
                     }
 
-                    match r#type {
-                        ColumnType::String(_) => write!(buf, "val.to_owned()")?,
-                        ColumnType::Bool(_) => {
-                            // Bools will do case-insensitive comparisons for 'true'/'false'
-                            writeln!(buf, "if val.eq_ignore_ascii_case(\"true\") {{")?;
-                            writeln!(buf, "{indent}        true")?;
-                            writeln!(
-                                buf,
-                                "{indent}    }} else if val.eq_ignore_ascii_case(\"false\") {{"
-                            )?;
-                            writeln!(buf, "{indent}        false")?;
-                            writeln!(buf, "{indent}    }} else {{")?;
-                            writeln!(
-                            buf,
-                            "{indent}        return Some(Err((linenum, \"{name}\", val).into()));"
-                        )?;
-                            write!(buf, "{indent}    }}")?
-                        }
-                        _ => {
-                            writeln!(buf, "match val.parse() {{")?;
-                            writeln!(buf, "{indent}        Ok(v) => v,\n")?;
-                            writeln!(buf, "{indent}        Err(_) => return Some(Err((linenum, \"{name}\", val).into())),")?;
-                            write!(buf, "{indent}    }}")?
-                        }
-                    };
-
+                    write!(
+                        buf,
+                        "{indent}    Some(val) if val.eq_ignore_ascii_case(\"false\") => "
+                    )?;
                     if optional {
-                        writeln!(buf, "),")?;
+                        writeln!(buf, "Some(false),")?;
                     } else {
-                        writeln!(buf, ",")?;
+                        writeln!(buf, "false,")?;
                     }
+
+                    writeln!(buf, "{indent}    Some(val) => {error_string}")?;
                 }
-                ErrorHandling::Panic => {
-                    // With 'panic' error handling, failure to .get() a column will behave the same
-                    writeln!(buf, "{indent}    None => panic!(\"Failed to get '{name}' at line={{linenum}} column={i}\"),")?;
-
+                _ => {
+                    writeln!(buf, "{indent}    Some(val) => match val.parse() {{")?;
                     if optional {
-                        writeln!(buf, "{indent}    Some(\"\") => None,")?;
-                        write!(buf, "{indent}    Some(val) => Some(")?;
+                        writeln!(buf, "{indent}        Ok(v) => Some(v),")?;
                     } else {
-                        write!(buf, "{indent}    Some(val) => ")?;
+                        writeln!(buf, "{indent}        Ok(v) => v,")?;
                     }
-
-                    match r#type {
-                        ColumnType::String(_) => write!(buf, "val.to_owned()")?,
-                        ColumnType::Bool(_) => {
-                            writeln!(buf, "if val.eq_ignore_ascii_case(\"true\") {{")?;
-                            writeln!(buf, "{indent}        true")?;
-                            writeln!(
-                                buf,
-                                "{indent}    }} else if val.eq_ignore_ascii_case(\"false\") {{"
-                            )?;
-                            writeln!(buf, "{indent}        false")?;
-                            writeln!(buf, "{indent}    }} else {{")?;
-                            writeln!(buf, "{indent}        panic!(\"Failed to parse {name}='{{val}}' at line={{linenum}} column={i}\")")?;
-                            write!(buf, "{indent}    }}")?
-                        }
-                        _ => {
-                            writeln!(buf, "match val.parse() {{")?;
-                            writeln!(buf, "{indent}        Ok(v) => v,")?;
-                            writeln!(buf, "{indent}        Err(_) => panic!(\"Failed to parse {name}='{{val}}' at line={{linenum}} column={i}\"),")?;
-                            write!(buf, "{indent}    }}")?;
-                        }
-                    }
-
-                    if optional {
-                        writeln!(buf, "),")?;
-                    } else {
-                        writeln!(buf, ",")?;
-                    }
+                    writeln!(buf, "{indent}        Err(_) => {error_string},")?;
+                    writeln!(buf, "{indent}    }}")?;
                 }
             }
 
@@ -460,7 +484,11 @@ impl CsvFileInfo {
         {
             writeln!(buf, "{indent}let res = {typename} {{")?;
             for col in &self.columns {
-                writeln!(buf, "{indent}    {},", col.name)?;
+                writeln!(
+                    buf,
+                    "{indent}    {},",
+                    util::str_to_snake_case_identifier(&col.name)
+                )?;
             }
             writeln!(buf, "{indent}}};")?;
             writeln!(buf)?;
@@ -507,5 +535,94 @@ impl CsvFileInfo {
         writeln!(buf, "}}")?;
 
         Ok(())
+    }
+}
+
+impl CsvColumnInfo {
+    pub fn write_enum(&self, buf: &mut BufWriter<File>) -> Result<(), std::io::Error> {
+        let enum_name = util::str_to_camel_case_identifier(&self.name);
+
+        // definition
+        {
+            writeln!(buf, "#[derive(Copy, Clone, Debug, PartialEq, Eq)]")?;
+            writeln!(buf, "pub enum {enum_name} {{")?;
+
+            for seen_value in &self.seen_values {
+                let seen_value_name = util::str_to_camel_case_identifier(seen_value);
+
+                if seen_value_name != *seen_value {
+                    writeln!(buf, "    /// From the input string '{seen_value}'")?;
+                }
+                writeln!(buf, "    {seen_value_name},")?;
+            }
+
+            writeln!(buf, "}}")?;
+            writeln!(buf)?;
+        }
+
+        // implementation
+        {
+            writeln!(buf, "impl std::str::FromStr for {enum_name} {{")?;
+            writeln!(buf, "    type Err = String;")?;
+            writeln!(buf)?;
+            writeln!(
+                buf,
+                "    fn from_str(s: &str) -> Result<Self, Self::Err> {{"
+            )?;
+
+            writeln!(buf, "        match s {{")?;
+            for seen_value in &self.seen_values {
+                writeln!(
+                    buf,
+                    "            \"{seen_value}\" => Ok(Self::{}),",
+                    util::str_to_camel_case_identifier(seen_value)
+                )?;
+            }
+            writeln!(buf, "            _ => Err(s.to_string()),")?;
+            writeln!(buf, "        }}")?;
+            writeln!(buf, "    }}")?;
+            writeln!(buf, "}}")?;
+            writeln!(buf)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn as_str(&self, string_handling: StringHandling) -> Cow<'static, str> {
+        match self.r#type {
+            ColumnType::Unit => "()".into(),
+            ColumnType::Bool(false) => "bool".into(),
+            ColumnType::Bool(true) => "Option<bool>".into(),
+            ColumnType::I8(false) => "i8".into(),
+            ColumnType::I8(true) => "Option<i8>".into(),
+            ColumnType::I16(false) => "i16".into(),
+            ColumnType::I16(true) => "Option<i16>".into(),
+            ColumnType::I32(false) => "i32".into(),
+            ColumnType::I32(true) => "Option<i32>".into(),
+            ColumnType::I64(false) => "i64".into(),
+            ColumnType::I64(true) => "Option<i64>".into(),
+            ColumnType::U8(false) => "u8".into(),
+            ColumnType::U8(true) => "Option<u8>".into(),
+            ColumnType::U16(false) => "u16".into(),
+            ColumnType::U16(true) => "Option<u16>".into(),
+            ColumnType::U32(false) => "u32".into(),
+            ColumnType::U32(true) => "Option<u32>".into(),
+            ColumnType::U64(false) => "u64".into(),
+            ColumnType::U64(true) => "Option<u64>".into(),
+            ColumnType::F64(false) => "f64".into(),
+            ColumnType::F64(true) => "Option<f64>".into(),
+            ColumnType::String(is_opt) => match (is_opt, string_handling) {
+                (false, StringHandling::Owned) => "String".into(),
+                (true, StringHandling::Owned) => "Option<String>".into(),
+                (false, StringHandling::Static) => "&'static str".into(),
+                (true, StringHandling::Static) => "Option<&'static str>".into(),
+                (false, StringHandling::Enum(_)) => {
+                    util::str_to_camel_case_identifier(&self.name).into()
+                }
+                (true, StringHandling::Enum(_)) => {
+                    format!("Option<{}>", util::str_to_camel_case_identifier(&self.name)).into()
+                }
+            },
+        }
     }
 }

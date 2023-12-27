@@ -1,6 +1,8 @@
-use std::{fmt::Display, str::FromStr};
+use std::str::FromStr;
 
 #[derive(PartialEq, Debug)]
+/// Stores the type of an output CSV; for non-unit types,
+/// also stores whether the type is optional.
 pub enum ColumnType {
     Unit,
     Bool(bool),
@@ -16,41 +18,7 @@ pub enum ColumnType {
     String(bool),
 }
 
-impl Display for ColumnType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
 impl ColumnType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            ColumnType::Unit => "()",
-            ColumnType::Bool(false) => "bool",
-            ColumnType::Bool(true) => "Option<bool>",
-            ColumnType::I8(false) => "i8",
-            ColumnType::I8(true) => "Option<i8>",
-            ColumnType::I16(false) => "i16",
-            ColumnType::I16(true) => "Option<i16>",
-            ColumnType::I32(false) => "i32",
-            ColumnType::I32(true) => "Option<i32>",
-            ColumnType::I64(false) => "i64",
-            ColumnType::I64(true) => "Option<i64>",
-            ColumnType::U8(false) => "u8",
-            ColumnType::U8(true) => "Option<u8>",
-            ColumnType::U16(false) => "u16",
-            ColumnType::U16(true) => "Option<u16>",
-            ColumnType::U32(false) => "u32",
-            ColumnType::U32(true) => "Option<u32>",
-            ColumnType::U64(false) => "u64",
-            ColumnType::U64(true) => "Option<u64>",
-            ColumnType::F64(false) => "f64",
-            ColumnType::F64(true) => "Option<f64>",
-            ColumnType::String(false) => "String",
-            ColumnType::String(true) => "Option<String>",
-        }
-    }
-
     pub fn is_optional(&self) -> bool {
         match self {
             ColumnType::Unit => false,
@@ -75,7 +43,9 @@ pub enum IntermediateColumnType {
     Bool(bool),
     /// Stores the minimum and maximum integer values present
     Integer(i128, i128, bool),
+    /// Stores whether this column can be optional.
     Float(bool),
+    /// Stores whether this column can be optional.
     String(bool),
 }
 
