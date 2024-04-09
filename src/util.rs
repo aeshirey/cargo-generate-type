@@ -92,7 +92,7 @@ pub fn read_doc_file(data_filename: &Path) -> Option<HashMap<String, Vec<String>
     let mut section = String::new();
     let mut doc_lines: Vec<String> = Vec::new();
 
-    for line in buf.lines().flatten() {
+    for line in buf.lines().map_while(Result::ok) {
         if line.starts_with('[') && line.ends_with(']') {
             // starting a new section. pop empty lines from the end
             while !doc_lines.is_empty() && doc_lines[doc_lines.len() - 1].is_empty() {
@@ -122,6 +122,12 @@ fn is_identifier_char(c: char) -> bool {
 pub fn str_to_snake_case_identifier(s: &str) -> String {
     let mut result = String::new();
     let mut underscore = false;
+
+    // Handling cases like "FIRST_NAME"
+    if s == s.to_uppercase() {
+        //&& s.contains('_') {
+        return s.to_lowercase();
+    }
 
     for c in s.chars() {
         match c {
@@ -159,7 +165,7 @@ pub fn str_to_camel_case_identifier(s: &str) -> String {
                 cap = false;
                 c.to_uppercase().for_each(|ch| result.push(ch));
             }
-            c => result.push(c),
+            c => c.to_lowercase().for_each(|ch| result.push(ch)),
         }
     }
 
@@ -185,6 +191,9 @@ fn test_str_to_snake_case_identifier() {
 
     let snake = str_to_snake_case_identifier("Sepal length");
     assert_eq!(snake, "sepal_length");
+
+    let snake = str_to_snake_case_identifier("FIRST_NAME");
+    assert_eq!(snake, "first_name");
 }
 
 #[test]
@@ -200,4 +209,7 @@ fn test_str_to_camel_case_identifier() {
 
     let snake = str_to_camel_case_identifier("I. versicolor");
     assert_eq!(snake, "IVersicolor");
+
+    let snake = str_to_camel_case_identifier("CLASS");
+    assert_eq!(snake, "Class");
 }

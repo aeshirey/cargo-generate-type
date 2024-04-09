@@ -65,8 +65,11 @@ impl CsvFileInfo {
                 .headers()?
                 .iter()
                 .map(crate::util::header_to_identifier)
+                .take_while(|s| !s.is_empty())
                 .collect::<Vec<_>>()
         };
+
+        let removed_unnamed_columns = columns.len() != reader.headers().unwrap().len();
 
         let mut intermediates = (0..columns.len())
             .map(|_| IntermediateColumnType::default())
@@ -80,8 +83,13 @@ impl CsvFileInfo {
 
         let start_position = reader.position().clone();
 
-        for (linenum, row) in reader.records().flatten().take(num_rows).enumerate() {
-            if row.len() != columns.len() {
+        for (linenum, row) in reader
+            .records()
+            .map_while(Result::ok)
+            .take(num_rows)
+            .enumerate()
+        {
+            if !removed_unnamed_columns && row.len() != columns.len() {
                 return Err(TypeGenErrors::Other(
                     format!(
                         "Expected {} columns but found {} on line {linenum}",
@@ -94,7 +102,11 @@ impl CsvFileInfo {
 
             for index in 0..columns.len() {
                 //println!("{} @ {index}", &row[index]);
-                intermediates[index].agg(&row[index]);
+                if self.args.trim_input {
+                    intermediates[index].agg(row[index].trim());
+                } else {
+                    intermediates[index].agg(&row[index]);
+                }
             }
         }
 
@@ -106,7 +118,7 @@ impl CsvFileInfo {
             .collect::<Vec<_>>();
 
         if self.args.string_handling != StringHandling::Owned {
-            for row in reader.records().flatten().take(num_rows) {
+            for row in reader.records().map_while(Result::ok).take(num_rows) {
                 for index in 0..columns.len() {
                     // Only need to do anything if this is a string column
                     if matches!(intermediates[index], IntermediateColumnType::String(_)) {
@@ -162,6 +174,7 @@ impl CsvFileInfo {
         let typename = self.args.get_typename();
 
         if self.args.error_handling == ErrorHandling::Result {
+            writeln!(buf, "#[derive(Debug)]")?;
             writeln!(buf, "pub enum {typename}Error {{")?;
             writeln!(buf, "    CsvError(csv::Error),")?;
             writeln!(buf, "    ColumnNotFound {{")?;
@@ -261,7 +274,7 @@ impl CsvFileInfo {
             )?;
             writeln!(
                 buf,
-                "    pub const COLUMNS: [(&str, &str); {}] = [",
+                "    pub const COLUMNS: [(&'static str, &'static str); {}] = [",
                 self.columns.len()
             )?;
             for col in &self.columns {
@@ -386,7 +399,12 @@ impl CsvFileInfo {
             }
 
             let snake_name = util::str_to_snake_case_identifier(name);
-            writeln!(buf, "{indent}let {snake_name} = match self.row.get({i}) {{")?;
+            if self.args.trim_input {
+                writeln!(buf, "{indent}let {snake_name} = match self.row.get({i}).map(|s| s.trim()) {{")?;
+            } else {
+                writeln!(buf, "{indent}let {snake_name} = match self.row.get({i}) {{")?;
+            }
+
             write!(buf, "{indent}    None => ")?;
 
             // Can't get a value from the CSV reader
@@ -421,8 +439,14 @@ impl CsvFileInfo {
 
             match r#type {
                 ColumnType::String(_) => match self.args.string_handling {
+                    //StringHandling::Owned if self.args.trim_input => {
+                    //    writeln!(buf, "{indent}    Some(val) => Some(val.to_owned())")?
+                    //}
+                    StringHandling::Owned if optional => {
+                        writeln!(buf, "{indent}    Some(val) => Some(val.to_owned())")?
+                    }
                     StringHandling::Owned => {
-                        write!(buf, "{indent}    Some(val) => val.to_owned()")?
+                        writeln!(buf, "{indent}    Some(val) => val.to_owned()")?
                     }
                     StringHandling::Static => {
                         //writeln!(buf, "Some(val) => match val {{")?;
@@ -507,7 +531,8 @@ impl CsvFileInfo {
         writeln!(buf, "}}")?;
         writeln!(buf)?;
 
-        writeln!(buf, "fn main() {{")?;
+        writeln!(buf, "#[test]")?;
+        writeln!(buf, "fn test_load() {{")?;
         match self.args.error_handling {
             ErrorHandling::Result => {
                 // for the result type, our sample will flatten Result<T,E> out to T
@@ -517,7 +542,7 @@ impl CsvFileInfo {
                     self.args.input_file
                 )?;
                 writeln!(buf, "        .expect(\"Couldn't load file\")")?;
-                writeln!(buf, "        .flatten()")?;
+                writeln!(buf, "        .map_while(Result::ok)")?;
                 writeln!(buf, "    {{")?;
             }
             _ => {

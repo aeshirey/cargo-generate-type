@@ -84,3 +84,58 @@ Because this binary is meant to be a Cargo custom command, it is called as `carg
 ./cargo-generate-type generate-type shareholder_report.csv --error result
 #                     ^^^^^^^^^^^^^ or any bogus argument is fine
 ```
+
+## Extra documentation
+You can create a ".def" file alongside your input ".csv" that will produce documentation for the type's fields. For example, given the above `Iris` datatype generated from "iris.csv", you might create an "iris.def" file that looks like this:
+
+```ignore
+This represents [Fisher's Iris data set](https://en.wikipedia.org/wiki/Iris_flower_data_set)
+
+[sepal length in cm]
+The length of the flower's sepal, in centimeters.
+
+[sepal width in cm]
+The width of the flower's sepal, in centimeters.
+
+[petal length in cm]
+The length of the flower's petal, in centimeters.
+
+[petal width in cm]
+The width of the flower's petal, in centimeters.
+
+[class]
+The species of flower, one of: Iris-setosa, Iris-virginica, Iris-versicolor.
+```
+
+When generating code, the following type is generated with documentation:
+
+```rust
+#[derive(Clone, Debug)]
+/// This represents [Fisher's Iris data set](https://en.wikipedia.org/wiki/Iris_flower_data_set)
+pub struct Iris {
+    /// The length of the flower's sepal, in centimeters.
+    pub sepal_length_in_cm: f64,
+    /// The width of the flower's sepal, in centimeters.
+    pub sepal_width_in_cm: f64,
+    /// The length of the flower's petal, in centimeters.
+    pub petal_length_in_cm: f64,
+    /// The width of the flower's petal, in centimeters.
+    pub petal_width_in_cm: f64,
+    /// The species of flower, one of: Iris-setosa, Iris-virginica, Iris-versicolor.
+    pub class: String,
+}
+```
+
+## Trimming input
+Some input files might have space-padded content despite being delimited. For example:
+
+```ignore
+sepal length in cm,sepal width in cm,petal length in cm,petal width in cm,class
+5.1               ,3.5              ,1.4               ,0.2              ,Iris-setosa
+4.9               ,3.0              ,1.4               ,0.2              ,Iris-setosa
+4.7               ,3.2              ,1.3               ,0.2              ,Iris-setosa
+4.6               ,3.1              ,1.5               ,0.2              ,Iris-setosa
+5.0               ,3.6              ,1.4               ,0.2              ,Iris-setosa
+```
+
+In this case, because the values won't parse as floats, they would incorrectly be seen as Strings. If you pass the `--trim-input` switch, the values will be trimmed before trying to parse. This switch is _not_ enabled by default.

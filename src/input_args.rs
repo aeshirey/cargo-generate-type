@@ -97,6 +97,10 @@ pub struct Commands {
     /// How many individual values are recognized for 'static' or 'enum' string_handling; other values are handled as errors.
     #[arg(short, long, default_value = "20")]
     pub max_strings: Option<usize>,
+
+    /// Should values be trimmed
+    #[arg(long, default_value = "false")]
+    pub trim_input: bool,
 }
 
 impl Commands {

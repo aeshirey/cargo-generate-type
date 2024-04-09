@@ -1,6 +1,6 @@
 [package]
 name = "cargo-generate-type"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Adam Shirey <adam@shirey.ch>"]
 edition = "2021"
 
