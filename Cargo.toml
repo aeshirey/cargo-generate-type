@@ -1,6 +1,6 @@
 [package]
 name = "cargo-generate-type"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Adam Shirey <adam@shirey.ch>"]
 edition = "2021"
 
@@ -12,5 +12,5 @@ license = "MIT OR Apache-2.0"
 keywords = ["codegen", "csv", "type"]
 
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 csv = "1.3"

@@ -289,45 +289,78 @@ impl CsvFileInfo {
             writeln!(buf)?;
         }
 
-        writeln!(
-            buf,
-            "    pub fn load_csv<P>(filename: P) -> Result<{typename}Iterator, csv::Error>"
-        )?;
-        writeln!(buf, "    where")?;
-        writeln!(buf, "        P: AsRef<std::path::Path>,")?;
-        writeln!(buf, "    {{")?;
-        writeln!(buf, "        let reader = csv::ReaderBuilder::new()")?;
+        // load_csv function
+        {
+            writeln!(
+                buf,
+                "    pub fn load_csv<P>(filename: P) -> Result<{typename}Iterator<std::fs::File>, csv::Error>"
+            )?;
+            writeln!(buf, "    where")?;
+            writeln!(buf, "        P: AsRef<std::path::Path>,")?;
+            writeln!(buf, "    {{")?;
+            writeln!(buf, "        let reader = csv::ReaderBuilder::new()")?;
 
-        if self.args.no_header {
-            writeln!(buf, "            .has_headers(false)")?;
-        } else {
-            writeln!(buf, "            .has_headers(true)")?;
+            if self.args.no_header {
+                writeln!(buf, "            .has_headers(false)")?;
+            } else {
+                writeln!(buf, "            .has_headers(true)")?;
+            }
+
+            if self.args.delimiter == '\t' {
+                writeln!(buf, "            .delimiter(b'\\t')")?;
+            } else {
+                writeln!(buf, "            .delimiter(b'{}')", self.args.delimiter)?;
+            };
+            writeln!(buf, "            .from_path(filename)?;")?;
+            writeln!(buf)?;
+            writeln!(buf, "        let records = reader.into_records();")?;
+            writeln!(buf, "        let row = csv::StringRecord::default();")?;
+            writeln!(buf, "        Ok({typename}Iterator {{ records, row }})")?;
+            writeln!(buf, "    }}")?;
+            writeln!(buf)?;
         }
 
-        if self.args.delimiter == '\t' {
-            writeln!(buf, "            .delimiter(b'\\t')")?;
-        } else {
-            writeln!(buf, "            .delimiter(b'{}')", self.args.delimiter)?;
-        };
-        writeln!(buf, "            .from_path(filename)?;")?;
-        writeln!(buf)?;
-        writeln!(buf, "        let records = reader.into_records();")?;
-        writeln!(buf, "        let row = csv::StringRecord::default();")?;
-        writeln!(buf, "        Ok({typename}Iterator {{ records, row }})")?;
-        writeln!(buf, "    }}")?;
-        writeln!(buf, "}}")?;
-        writeln!(buf)?;
+        // load_csv_reader function
+        {
+            writeln!(
+                buf,
+                "    pub fn load_csv_reader<R>(reader: R) -> {typename}Iterator<R>"
+            )?;
+            writeln!(buf, "    where")?;
+            writeln!(buf, "        R: std::io::Read")?;
+            writeln!(buf, "    {{")?;
+            writeln!(buf, "        let reader = csv::ReaderBuilder::new()")?;
 
-        writeln!(buf, "pub struct {typename}Iterator {{")?;
-        writeln!(
-            buf,
-            "    records: csv::StringRecordsIntoIter<std::fs::File>,"
-        )?;
+            if self.args.no_header {
+                writeln!(buf, "            .has_headers(false)")?;
+            } else {
+                writeln!(buf, "            .has_headers(true)")?;
+            }
+
+            if self.args.delimiter == '\t' {
+                writeln!(buf, "            .delimiter(b'\\t')")?;
+            } else {
+                writeln!(buf, "            .delimiter(b'{}')", self.args.delimiter)?;
+            };
+            writeln!(buf, "            .from_reader(reader);")?;
+            writeln!(buf)?;
+            writeln!(buf, "        let records = reader.into_records();")?;
+            writeln!(buf, "        let row = csv::StringRecord::default();")?;
+            writeln!(buf, "        {typename}Iterator {{ records, row }}")?;
+            writeln!(buf, "    }}")?;
+            writeln!(buf)?;
+        }
+
+        writeln!(buf, "}}")?;
+
+        writeln!(buf, "pub struct {typename}Iterator<T> {{")?;
+        writeln!(buf, "    records: csv::StringRecordsIntoIter<T>,")?;
         writeln!(buf, "    row: csv::StringRecord,")?;
         writeln!(buf, "}}")?;
         writeln!(buf)?;
 
-        writeln!(buf, "impl Iterator for {typename}Iterator {{")?;
+        writeln!(buf, "impl<T> Iterator for {typename}Iterator<T>")?;
+        writeln!(buf, "    where T: std::io::Read {{")?;
 
         match self.args.error_handling {
             ErrorHandling::Result => {
@@ -400,7 +433,10 @@ impl CsvFileInfo {
 
             let snake_name = util::str_to_snake_case_identifier(name);
             if self.args.trim_input {
-                writeln!(buf, "{indent}let {snake_name} = match self.row.get({i}).map(|s| s.trim()) {{")?;
+                writeln!(
+                    buf,
+                    "{indent}let {snake_name} = match self.row.get({i}).map(|s| s.trim()) {{"
+                )?;
             } else {
                 writeln!(buf, "{indent}let {snake_name} = match self.row.get({i}) {{")?;
             }
